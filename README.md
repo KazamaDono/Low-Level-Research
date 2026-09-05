@@ -34,9 +34,3 @@ High-performance socket optimization module for Linux. Three critical kernel-lev
 - **Part V — Format Strings & Integer Bugs:** Format string vulnerabilities, integer overflow/signedness
 - **Part VI — Advanced Topics:** Kernel exploitation, race conditions/TOCTOU, type confusion, sandbox escape, browser exploitation
 - **Part VII — Practical Application:** Fuzzing, pwntools workflows, CTF walkthroughs, real-world case studies, responsible disclosure
-
-## Author
-
-**Nour Issa** ([@KazamaDono](https://github.com/KazamaDono))
-- [spectra-vrg.org](https://spectra-vrg.org)
-- [LinkedIn](https://linkedin.com/in/ayukotsu)
