@@ -25,6 +25,8 @@ Original vulnerability research against real-world C codebases. Each finding inc
 | **Parson v1.5.3** | C JSON parser (2,487 LOC) | Manual source audit | 14 vulnerabilities, 9 CWE classes | 4 HIGH / 7 MEDIUM / 3 LOW | [Full Report](vulnerabilities/parson/) |
 | **Fastsocket** | Linux kernel socket library (SINA Corp) | AFL++ fuzzing + ASan | 3 vulnerabilities, 24 crash inputs | 1 CRITICAL / 2 HIGH | [Full Report](vulnerabilities/fastsocket/) |
 
+<img width="1672" height="941" alt="image" src="https://github.com/user-attachments/assets/96dba598-2f0a-4d67-8421-e207c6f384e3" />
+
 ---
 
 ## Parson v1.5.3 -- 14 Vulnerabilities in a C JSON Parser
