@@ -10,8 +10,6 @@ Heap buffer overflow | Stack buffer overflow | Use-after-free / Double-free
 
 ---
 
-**Researcher:** Nour Issa
-**Organization:** AIIDA Cybersecurity / Spectra VRG
 **Date:** September 2026
 **Target:** fastsocket (SINA Corporation)
 **Tooling:** AFL++ 5.03c + ASan + UBSan
@@ -923,7 +921,7 @@ The `[fa]` with brackets is the exact byte that was accessed. `fa` = heap left r
 
 <div align="center">
 
-Fastsocket Vulnerability Research | Nour Issa | AIIDA Cybersecurity / Spectra VRG
+Fastsocket Vulnerability Research
 
 September 2026
 

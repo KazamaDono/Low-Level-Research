@@ -10,8 +10,6 @@ Memory corruption, denial of service, data integrity, and thread safety
 
 ---
 
-**Researcher:** Nour Issa
-**Organization:** AIIDA Cybersecurity / Spectra VRG
 **Date:** September 2026
 **Target:** `parson.c` -- 2,487 lines of C
 
@@ -875,7 +873,7 @@ This was a **manual source code audit**, not fuzzing. We read all 2,487 lines of
 
 <div align="center">
 
-Parson v1.5.3 Vulnerability Research | Nour Issa | AIIDA Cybersecurity / Spectra VRG
+Parson v1.5.3 Vulnerability Research
 
 September 2026
 

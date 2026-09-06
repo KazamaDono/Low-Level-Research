@@ -18,9 +18,7 @@
 
 ## Research Portfolio
 
-This repository contains original vulnerability research conducted against real-world C codebases. Each target was selected for its attack surface relevance -- JSON parsers process untrusted input in nearly every web backend, and kernel networking modules run at the highest privilege level on production servers.
-
-Every finding includes the vulnerable source code, a working proof-of-concept, root cause analysis, and remediation guidance.
+Original vulnerability research against real-world C codebases. Each finding includes vulnerable source code, a working proof-of-concept, root cause analysis, and remediation guidance.
 
 | Target | Domain | Method | Findings | Severity | Writeup |
 |--------|--------|--------|----------|----------|---------|
@@ -31,136 +29,172 @@ Every finding includes the vulnerable source code, a working proof-of-concept, r
 
 ## Parson v1.5.3 -- 14 Vulnerabilities in a C JSON Parser
 
-**Target:** [parson.c](https://github.com/kgabis/parson) -- lightweight single-file JSON library used in embedded systems and server applications
-**Method:** Manual source code audit -- read all 2,487 lines, traced data flow from every public API entry point to dangerous internal operations
+**Target:** [parson.c](https://github.com/kgabis/parson) -- lightweight single-file JSON library
+**Method:** Manual source code audit of all 2,487 lines
 **Date:** September 2026
 
-### Vulnerability Summary
+### Attack Surface
 
 ```mermaid
-graph LR
-    subgraph HIGH
-        H1["#1 Stack Overflow<br/>vsprintf<br/>CWE-120/676"]
-        H2["#2 Heap Over-Read<br/>UTF-8 validation<br/>CWE-125"]
-        H3["#3 Integer Overflow<br/>serialization size<br/>CWE-190/122"]
-        H4["#4 UAF / Race<br/>thread-unsafe globals<br/>CWE-362/416"]
+graph TD
+    subgraph "Public API Entry Points"
+        PARSE["json_parse_string()<br/>json_parse_file()"]
+        SERIAL["json_serialize_to_string()"]
+        BUILD["json_value_init_*()<br/>json_object_set_*()"]
+        CONFIG["json_set_float_serialization_format()<br/>json_set_number_serialization_function()"]
+        OPS["json_value_deep_copy()<br/>json_validate()<br/>json_value_equals()"]
     end
 
-    subgraph MEDIUM
-        M1["#5-8 Uncontrolled Recursion<br/>serialize, deep_copy,<br/>validate, equals<br/>CWE-674"]
-        M2["#9 HashDoS<br/>deterministic djb2<br/>CWE-407"]
-        M3["#10 Locale Confusion<br/>strtod parsing<br/>CWE-474"]
-        M4["#11 Unsafe Callback<br/>no buffer size<br/>CWE-120"]
-    end
+    PARSE --> UTF8["is_valid_utf8()"]
+    PARSE --> HASH["hash_string() djb2"]
+    PARSE --> NUM["strtod()"]
+    SERIAL --> SPRINTF["parson_sprintf()<br/>vsprintf wrapper"]
+    SERIAL --> RECURSE["json_serialize_to_buffer_r()"]
+    BUILD --> OPS
+    CONFIG --> GLOBALS["Global mutable state<br/>no synchronization"]
 
-    subgraph LOW
-        L1["#12 Int Truncation<br/>hash capacity<br/>CWE-190"]
-        L2["#13 Alloc Overflow<br/>array/obj growth<br/>CWE-190"]
-        L3["#14 TOCTOU<br/>size/write pass<br/>CWE-367"]
-    end
+    UTF8 -->|"#2 reads 3 bytes OOB"| V2["Heap Over-Read<br/>CWE-125"]
+    HASH -->|"#9 deterministic collisions"| V9["HashDoS 288x<br/>CWE-407"]
+    NUM -->|"#10 locale-dependent"| V10["Data Corruption<br/>CWE-474"]
+    SPRINTF -->|"#1 no bounds on vsprintf"| V1["Stack Overflow<br/>CWE-120"]
+    RECURSE -->|"#3 int wraps at 2GB"| V3["Integer Overflow<br/>CWE-190"]
+    RECURSE -->|"#5-8 no depth limit"| V5["Stack Exhaustion<br/>CWE-674"]
+    GLOBALS -->|"#4 free while reading"| V4["Use-After-Free<br/>CWE-416"]
+    CONFIG -->|"#11 no buf size param"| V11["Callback Overflow<br/>CWE-120"]
 
-    style H1 fill:#d32f2f,color:#fff
-    style H2 fill:#d32f2f,color:#fff
-    style H3 fill:#d32f2f,color:#fff
-    style H4 fill:#d32f2f,color:#fff
-    style M1 fill:#e65100,color:#fff
-    style M2 fill:#e65100,color:#fff
-    style M3 fill:#e65100,color:#fff
-    style M4 fill:#e65100,color:#fff
-    style L1 fill:#f9a825,color:#000
-    style L2 fill:#f9a825,color:#000
-    style L3 fill:#f9a825,color:#000
+    style V1 fill:#333,color:#fff,stroke:#fff
+    style V2 fill:#333,color:#fff,stroke:#fff
+    style V3 fill:#333,color:#fff,stroke:#fff
+    style V4 fill:#333,color:#fff,stroke:#fff
+    style V5 fill:#555,color:#fff,stroke:#ccc
+    style V9 fill:#555,color:#fff,stroke:#ccc
+    style V10 fill:#555,color:#fff,stroke:#ccc
+    style V11 fill:#555,color:#fff,stroke:#ccc
 ```
 
-### Key Findings
+### How Each Vulnerability Works
 
-| # | Vulnerability | CWE | What Happens |
-|---|--------------|-----|-------------|
-| 1 | **Stack buffer overflow** via `vsprintf` | CWE-120/676 | User-controlled format string causes `parson_sprintf` to write 2,311 bytes into a 64-byte stack buffer. Attacker sets format to `"%.2000f"` then serializes `DBL_MAX`. |
-| 2 | **Heap over-read** in UTF-8 validation | CWE-125 | `verify_utf8_sequence` reads up to 3 bytes past allocation when given a 4-byte UTF-8 lead in a 1-byte buffer. Same bug class as Heartbleed. |
-| 3 | **Integer overflow** in serialization | CWE-190/122 | Size accumulator is `int` (32-bit). JSON >2 GB wraps to small value, causing `malloc` of tiny buffer followed by >2 GB write. |
-| 4 | **Use-after-free** via global race | CWE-362/416 | `parson_float_format` is a heap-allocated global with no synchronization. One thread frees it while another dereferences it mid-serialization. Crashed 3/3 runs in <500ms. |
-| 5-8 | **Uncontrolled recursion** (4 functions) | CWE-674 | Parser limits depth to 2048, but `serialize`, `deep_copy`, `validate`, and `equals` have no limit. API-built structures bypass the parser limit. 200k-deep nesting causes stack overflow. |
-| 9 | **HashDoS** via deterministic djb2 | CWE-407 | Fixed-seed hash allows collision generation. 8,192 colliding keys cause 288x slowdown (608ms vs 2.1ms). |
-| 10 | **Locale confusion** via `strtod` | CWE-474 | `strtod` obeys locale settings. Under comma-decimal locales, `[1,5]` silently becomes `[1.5]` (2-element array collapsed to 1). |
-| 11 | **Unsafe callback API** | CWE-120 | Number serialization callback receives raw buffer pointer with no size parameter. Buffer is 64 bytes but callback has no way to know. |
-| 12-14 | Integer truncation, allocation overflow, TOCTOU | CWE-190/367 | Theoretical issues requiring extreme memory (>100 GB) or race conditions in the two-pass serialization model. |
+```mermaid
+sequenceDiagram
+    participant A as Attacker
+    participant P as Parson
+    participant M as Memory
 
-### Audit Methodology
+    Note over A,M: #1 Stack Buffer Overflow (HIGH)
+    A->>P: Set format "%.2000f"
+    A->>P: Serialize DBL_MAX
+    P->>M: vsprintf writes 2,311 bytes into 64-byte stack buf
+    M-->>M: Return address overwritten
 
+    Note over A,M: #2 Heap Over-Read (HIGH)
+    A->>P: 1-byte string with 0xF4 lead
+    P->>M: verify_utf8_sequence reads buf[1..3] OOB
+    M-->>A: Leaks adjacent heap data (Heartbleed-class)
+
+    Note over A,M: #3 Integer Overflow (HIGH)
+    A->>P: JSON tree >2 GB serialized
+    P->>P: int accumulator wraps to small value
+    P->>M: malloc(small) then write >2 GB into it
+
+    Note over A,M: #4 Thread Race / UAF (HIGH)
+    A->>P: Thread 1 serializes (reads format ptr)
+    A->>P: Thread 2 changes format (frees old ptr)
+    P->>M: Thread 1 dereferences freed memory
+
+    Note over A,M: #9 HashDoS (MEDIUM)
+    A->>P: 8,192 keys with identical djb2 hashes
+    P->>P: Every insertion is O(n) linear scan
+    Note over P: 288x slowdown (608ms vs 2.1ms)
 ```
-1. Map the attack surface    -- every public function in parson.h
-2. grep for dangerous calls  -- vsprintf, strcpy, malloc, recursive calls
-3. Trace input to danger     -- can attacker reach the dangerous op?
-4. Write a PoC              -- compile, run, observe crash/leak/corruption
-5. Classify severity        -- HIGH (RCE path), MEDIUM (DoS/corruption), LOW (theoretical)
-```
+
+### Findings Table
+
+| # | Vulnerability | CWE | Impact |
+|---|--------------|-----|--------|
+| 1 | Stack overflow via `vsprintf` -- no bounds on format output | CWE-120/676 | RCE |
+| 2 | Heap over-read in UTF-8 -- reads 3 bytes past allocation | CWE-125 | Info leak |
+| 3 | Integer overflow in serialization size -- `int` wraps at 2 GB | CWE-190/122 | Heap overflow |
+| 4 | Thread-unsafe globals -- UAF on `parson_float_format` | CWE-362/416 | Corruption |
+| 5-8 | Uncontrolled recursion in 4 post-parse functions | CWE-674 | DoS |
+| 9 | HashDoS via deterministic djb2 collisions | CWE-407 | DoS |
+| 10 | Locale confusion -- `strtod` uses `,` as decimal in some locales | CWE-474 | Data corruption |
+| 11 | Callback API gives buffer pointer with no size | CWE-120 | Stack overflow |
+| 12-14 | Int truncation, alloc overflow, TOCTOU | CWE-190/367 | Theoretical |
 
 ---
 
 ## Fastsocket -- 3 Memory Corruption Vulnerabilities in a Kernel Socket Library
 
-**Target:** [fastsocket](https://github.com/fastos/fastsocket) -- SINA Corporation's kernel module + userspace library for accelerating socket operations on multi-core Linux servers
-**Method:** Coverage-guided fuzzing with AFL++ 5.03c, crash confirmation via ASan + UBSan
+**Target:** [fastsocket](https://github.com/fastos/fastsocket) -- SINA Corporation's kernel module + userspace library
+**Method:** Coverage-guided fuzzing with AFL++ 5.03c, confirmed via ASan + UBSan
 **Date:** September 2026
 
-### Architecture
-
-Fastsocket intercepts standard socket calls (`socket()`, `listen()`, `close()`, `shutdown()`) via `LD_PRELOAD`, routing them through a kernel module at `/dev/fastsocket`. Any application loaded with the library inherits its vulnerabilities transparently.
+### Architecture and Attack Surface
 
 ```mermaid
 graph TB
-    subgraph Userspace
+    subgraph "Userspace"
         APP["Application<br/>(Nginx, HAProxy)"]
         LIB["libsocket.so<br/>LD_PRELOAD"]
-        DEMO["demo/server.c"]
+        DEMO["demo/server.c<br/>HTTP server"]
     end
 
-    subgraph Kernel
-        MOD["/dev/fastsocket"]
+    subgraph "Kernel"
+        MOD["/dev/fastsocket<br/>kernel module"]
     end
 
     APP -->|"socket() listen() close()"| LIB
     LIB -->|"ioctl()"| MOD
     DEMO --> LIB
 
-    V1["VULN-01: Heap OOB in fsocket_fd_set<br/>CRITICAL -- no bounds check on fd index"]
-    V2["VULN-02: Stack overflow in argparse<br/>HIGH -- strncpy without null termination"]
-    V3["VULN-03: UAF/double-free in pool<br/>HIGH -- freelist corruption via double-free"]
+    LIB -.->|"fd indexes array<br/>with no bounds check"| V1["VULN-01: Heap OOB<br/>fsocket_fd_set[fd]<br/>CRITICAL"]
+    DEMO -.->|"strncpy fills buffer<br/>without null terminator"| V2["VULN-02: Stack Overflow<br/>argument parsing<br/>HIGH"]
+    DEMO -.->|"double-free corrupts<br/>freelist into cycle"| V3["VULN-03: UAF / Double-Free<br/>pool allocator<br/>HIGH"]
 
-    LIB -.-> V1
-    DEMO -.-> V2
-    DEMO -.-> V3
+    style V1 fill:#333,color:#fff,stroke:#fff
+    style V2 fill:#555,color:#fff,stroke:#ccc
+    style V3 fill:#555,color:#fff,stroke:#ccc
+    style LIB fill:#222,color:#fff,stroke:#888
+    style MOD fill:#222,color:#fff,stroke:#888
+```
 
-    style V1 fill:#d32f2f,color:#fff
-    style V2 fill:#e65100,color:#fff
-    style V3 fill:#e65100,color:#fff
-    style LIB fill:#1565c0,color:#fff
-    style MOD fill:#2e7d32,color:#fff
+### How Each Vulnerability Works
+
+```mermaid
+sequenceDiagram
+    participant K as Kernel
+    participant L as libsocket.so
+    participant H as Heap
+
+    Note over K,H: VULN-01: Heap Buffer Overflow (CRITICAL)
+    K->>L: accept() returns fd=70000
+    L->>L: close(70000)
+    L->>H: fsocket_fd_set[70000] -- 17,856 bytes past allocation
+    H-->>H: Adjacent heap object corrupted
+
+    Note over K,H: VULN-02: Stack Buffer Overflow (HIGH)
+    K->>L: argv[2] = 64+ bytes
+    L->>L: strncpy(log_path, argv[2], 64) -- no null terminator
+    L->>L: strlen(log_path) reads past buffer
+    L-->>L: Stack redzone hit
+
+    Note over K,H: VULN-03: Double-Free / UAF (HIGH)
+    L->>H: free_context(ctx1) -- legitimate
+    L->>H: free_context(ctx1) -- DOUBLE FREE
+    Note over H: Freelist: ctx1->ctx1->ctx1... (cycle)
+    L->>H: alloc_context() returns ctx1
+    L->>H: alloc_context() returns ctx1 AGAIN
+    Note over H: Two connections share one buffer
 ```
 
 ### Fuzzing Results
 
-| Harness | Target Code | Crashes | Coverage | Verdict |
-|---------|------------|---------|----------|---------|
-| `fuzz_fdset` | `libsocket.c` -- fd_set array access | **8** | 38.89% | **CRITICAL** |
-| `fuzz_argparse` | `server.c` -- strncpy/strlen parsing | **11** | 38.98% | **HIGH** |
+| Harness | Target | Crashes | Coverage | Verdict |
+|---------|--------|---------|----------|---------|
+| `fuzz_fdset` | `libsocket.c` -- fd_set array | **8** | 38.89% | **CRITICAL** |
+| `fuzz_argparse` | `server.c` -- strncpy/strlen | **11** | 38.98% | **HIGH** |
 | `fuzz_context_pool` | `server.c` -- slab allocator | **5** | 25.53% | **HIGH** |
-| `fuzz_http_parse` | `server.c` -- HTTP read/write | 0 | 20.00% | CLEAN |
-
-### Vulnerability Details
-
-**VULN-01: Heap Buffer Overflow in `fsocket_fd_set` (CRITICAL)**
-
-The library allocates a 65,536-element integer array indexed by file descriptor number. The `listen()`, `close()`, and `shutdown()` wrappers index into this array with the raw `fd` value and **never check bounds**. An fd above 65,536 (reachable when `ulimit -n` is raised or via `dup2()`) writes past the allocation, corrupting adjacent heap objects. The write values are 0 or 1, but the offset is attacker-controlled -- enough for heap metadata corruption.
-
-**VULN-02: Stack Buffer Overflow in Argument Parsing (HIGH)**
-
-The demo server uses `strncpy()` to copy command-line arguments into 64-byte and 32-byte stack buffers. When the source string fills the entire buffer, `strncpy` does not null-terminate. Subsequent `strlen()` and `fopen()` calls read past the buffer into adjacent stack memory. AFL++ found this in 90 seconds -- the crash input is `'o'` followed by 64 bytes, filling `log_path[64]` without a terminator.
-
-**VULN-03: Use-After-Free / Double-Free in Pool Allocator (HIGH)**
-
-The server's custom slab allocator manages connection contexts via a freelist with no double-free protection. Freeing the same context twice creates a cycle in the freelist (`ctx1->next_idx` points to itself). The next two allocations both return the same context -- two connections sharing one buffer. The pool exhaustion guard uses `assert()`, which compiles to nothing in release builds (`-DNDEBUG`). The fuzzer triggered SIGSEGV crashes so severe ASan couldn't intervene.
+| `fuzz_http_parse` | `server.c` -- HTTP pipeline | 0 | 20.00% | CLEAN |
 
 ---
 
@@ -185,65 +219,20 @@ The server's custom slab allocator manages connection contexts via a freelist wi
 
 ---
 
-## Tools and Techniques Used
-
-```mermaid
-mindmap
-  root((Research<br/>Toolkit))
-    Static Analysis
-      Manual source audit
-      grep for dangerous patterns
-      Data flow tracing
-      Attack surface mapping
-    Dynamic Analysis
-      AFL++ 5.03c
-      AddressSanitizer
-      ThreadSanitizer
-      UndefinedBehaviorSanitizer
-    Exploit Development
-      Proof-of-concept coding
-      Crash reproduction
-      Root cause analysis
-      Severity classification
-    Toolchain
-      Clang / GCC
-      GDB
-      pthreads
-      Custom fuzzing harnesses
-```
-
----
-
 ## Research Methodology
-
-Every target in this repository follows the same framework:
 
 ```mermaid
 graph LR
-    A["1. Select Target<br/>Real-world C code<br/>that processes<br/>untrusted input"] --> B["2. Map Attack Surface<br/>Public API functions<br/>Input/output boundaries<br/>State mutation points"]
-    B --> C["3. Find Candidates<br/>Dangerous functions<br/>Missing bounds checks<br/>Unsafe patterns"]
-    C --> D["4. Trace Data Flow<br/>Can attacker reach<br/>the dangerous op?<br/>What's the outcome?"]
-    D --> E["5. Prove It<br/>Write PoC<br/>Compile + run<br/>Observable failure"]
-    E --> F["6. Classify + Report<br/>CWE mapping<br/>Severity rating<br/>Remediation"]
+    A["1. Select Target<br/>Real-world C code<br/>processing untrusted input"] --> B["2. Map Attack Surface<br/>Public API functions<br/>I/O boundaries"]
+    B --> C["3. Find Candidates<br/>Dangerous functions<br/>Missing bounds checks"]
+    C --> D["4. Trace Data Flow<br/>Attacker-reachable?<br/>Security-relevant outcome?"]
+    D --> E["5. Prove It<br/>Write PoC<br/>Observable failure"]
+    E --> F["6. Classify + Report<br/>CWE mapping<br/>Severity + remediation"]
 
-    style A fill:#1565c0,color:#fff
-    style B fill:#1565c0,color:#fff
-    style C fill:#e65100,color:#fff
-    style D fill:#e65100,color:#fff
-    style E fill:#d32f2f,color:#fff
-    style F fill:#2e7d32,color:#fff
+    style A fill:#1a1a1a,color:#fff,stroke:#555
+    style B fill:#2a2a2a,color:#fff,stroke:#555
+    style C fill:#3a3a3a,color:#fff,stroke:#666
+    style D fill:#4a4a4a,color:#fff,stroke:#666
+    style E fill:#555,color:#fff,stroke:#777
+    style F fill:#666,color:#fff,stroke:#888
 ```
-
-**Static targets** (Parson): full source read, pattern matching for dangerous functions, manual trace from input to crash.
-
-**Dynamic targets** (Fastsocket): extract vulnerable code into harnesses, compile with AFL++ instrumentation + sanitizers, fuzz, triage crashes via ASan reports.
-
-Both approaches produce the same deliverable: reproducible proof that the bug exists, not just a theory that it might.
-
----
-
-<div align="center">
-
-**Nour Issa** | AIIDA Cybersecurity / Spectra VRG
-
-</div>
