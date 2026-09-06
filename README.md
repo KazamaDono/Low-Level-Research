@@ -32,7 +32,9 @@ Original vulnerability research against real-world C codebases. Each finding inc
 ## Parson v1.5.3 -- 14 Vulnerabilities in a C JSON Parser
 
 **Target:** [parson.c](https://github.com/kgabis/parson) -- lightweight single-file JSON library
+
 **Method:** Manual source code audit of all 2,487 lines
+
 **Date:** September 2026
 
 ### Attack Surface
@@ -128,7 +130,9 @@ sequenceDiagram
 ## Fastsocket -- 3 Memory Corruption Vulnerabilities in a Kernel Socket Library
 
 **Target:** [fastsocket](https://github.com/fastos/fastsocket) -- SINA Corporation's kernel module + userspace library
+
 **Method:** Coverage-guided fuzzing with AFL++ 5.03c, confirmed via ASan + UBSan
+
 **Date:** September 2026
 
 ### Architecture and Attack Surface
